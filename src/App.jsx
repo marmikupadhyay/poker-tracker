@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, setDoc, onSnapshot, query, where } from 'firebase/firestore';
 import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, signOut } from "firebase/auth";
 import { db, auth } from './firebase';
 import { Line } from 'react-chartjs-2';
@@ -18,6 +18,17 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, T
 
 const NUM_SEATS = 9;
 const STREETS = ['PRE-FLOP', 'FLOP', 'TURN', 'RIVER'];
+
+const DEFAULT_TAGS = [
+  { emoji: '🐟', desc: 'Fish (Loose Passive)' },
+  { emoji: '🦈', desc: 'Shark (Solid Winner)' },
+  { emoji: '💣', desc: 'Maniac (Aggressive)' },
+  { emoji: '🪨', desc: 'Rock (Tight Passive)' },
+  { emoji: '🤠', desc: 'Pro / Regular' },
+  { emoji: '🤡', desc: 'Donkey (Reckless)' },
+  { emoji: '🤑', desc: 'Whale (Rich/Loose)' },
+  { emoji: '🦁', desc: 'LAG (Loose Aggressive)' }
+];
 
 const getPositionName = (seatIdx, dealerIdx) => {
   const offset = (seatIdx - dealerIdx + NUM_SEATS) % NUM_SEATS;
@@ -40,6 +51,7 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState('');
   const [authName, setAuthName] = useState('');
   const [authError, setAuthError] = useState('');
+  const [customTags, setCustomTags] = useState(DEFAULT_TAGS);
   
   // 'session', 'history', 'users'
   const [viewMode, setViewMode] = useState('session');
@@ -70,17 +82,35 @@ export default function App() {
       setCurrentUser(user);
       setAuthLoading(false);
     });
+    return () => unsubAuth();
+  }, []);
 
-    const unsubSessions = onSnapshot(collection(db, 'sessions'), (snapshot) => {
+  useEffect(() => {
+    if (!currentUser) {
+      setSessions([]);
+      setUsers([]);
+      setCustomTags(DEFAULT_TAGS);
+      return;
+    }
+    
+    const unsubSettings = onSnapshot(doc(db, 'userSettings', currentUser.uid), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().tags) {
+        setCustomTags(docSnap.data().tags);
+      } else {
+        setCustomTags(DEFAULT_TAGS);
+      }
+    });
+
+    const unsubSessions = onSnapshot(query(collection(db, 'sessions'), where('ownerId', '==', currentUser.uid)), (snapshot) => {
       const fetched = snapshot.docs.map(d => d.data());
       setSessions(fetched);
     });
-    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+    const unsubUsers = onSnapshot(query(collection(db, 'users'), where('ownerId', '==', currentUser.uid)), (snapshot) => {
       const fetched = snapshot.docs.map(d => d.data());
       setUsers(fetched);
     });
-    return () => { unsubAuth(); unsubSessions(); unsubUsers(); };
-  }, []);
+    return () => { unsubSessions(); unsubUsers(); unsubSettings(); };
+  }, [currentUser]);
 
   const updateSession = (updater) => {
     setSessions(prev => prev.map(s => {
@@ -99,7 +129,7 @@ export default function App() {
     try {
       if (authMode === 'register') {
         const cred = await createUserWithEmailAndPassword(auth, authEmail, authPassword);
-        const newUser = { id: cred.user.uid, name: authName || authEmail.split('@')[0], tags: [], notes: '' };
+        const newUser = { id: cred.user.uid, ownerId: cred.user.uid, name: authName || authEmail.split('@')[0], tags: [], notes: '' };
         await setDoc(doc(db, 'users', cred.user.uid), newUser);
       } else {
         await signInWithEmailAndPassword(auth, authEmail, authPassword);
@@ -116,6 +146,7 @@ export default function App() {
       const cred = await signInWithPopup(auth, provider);
       await setDoc(doc(db, 'users', cred.user.uid), { 
         id: cred.user.uid, 
+        ownerId: cred.user.uid,
         name: cred.user.displayName || cred.user.email.split('@')[0]
       }, { merge: true });
     } catch (err) {
@@ -149,6 +180,7 @@ export default function App() {
 
     const newSession = {
       id: Date.now(),
+      ownerId: currentUser.uid,
       startTime: new Date().toISOString(),
       endTime: null,
       location: sessionLocation,
@@ -340,7 +372,7 @@ export default function App() {
   const handleCreateUser = () => {
     const name = prompt("Enter new user name:");
     if (!name) return;
-    const newUser = { id: `u_${Date.now()}`, name, tags: [], notes: '' };
+    const newUser = { id: `u_${Date.now()}`, ownerId: currentUser.uid, name, tags: [], notes: '' };
     setDoc(doc(db, 'users', newUser.id), newUser).catch(console.error);
     setUsers(prev => {
       if (prev.find(u => u.id === newUser.id)) return prev;
@@ -669,15 +701,53 @@ export default function App() {
           <div className="form-section">
             <h3>Quick Tags</h3>
             <div style={{display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap'}}>
-              {['🐟', '🦈', '💣', '🪨', '🤠', '🤡', '🤑', '🦁'].map(emoji => (
-                <button key={emoji} onClick={() => {
-                  const tags = u.tags || [];
-                  updateGlobalUser(u.id, { tags: tags.includes(emoji) ? tags.filter(t => t !== emoji) : [...tags, emoji] });
-                }} className="btn action-btn" style={{padding: '0.5rem 1rem', fontSize: '1.2rem', opacity: u.tags?.includes(emoji) ? 1 : 0.4}}>
-                  {emoji}
-                </button>
-              ))}
+              {customTags.map(tag => {
+                const isActive = u.tags?.includes(tag.emoji);
+                return (
+                  <button 
+                    key={tag.emoji} 
+                    title={tag.desc}
+                    onClick={() => {
+                      const tags = u.tags || [];
+                      updateGlobalUser(u.id, { tags: isActive ? tags.filter(t => t !== tag.emoji) : [...tags, tag.emoji] });
+                    }} 
+                    className="btn action-btn" 
+                    style={{
+                      padding: '0.5rem', 
+                      fontSize: '1rem', 
+                      opacity: isActive ? 1 : 0.4,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '0.2rem',
+                      minWidth: '60px'
+                    }}
+                  >
+                    <div style={{fontSize: '1.4rem'}}>{tag.emoji}</div>
+                    <div style={{fontSize: '0.65rem', color: isActive ? 'white' : 'var(--text-muted)', textAlign: 'center', lineHeight: '1.1'}}>{tag.desc}</div>
+                  </button>
+                );
+              })}
             </div>
+            
+            <div className="mb-2" style={{borderTop: '1px solid var(--border)', paddingTop: '1rem'}}>
+              <div className="input-label" style={{marginBottom: '0.5rem'}}>Add Custom Tag</div>
+              <div style={{display: 'flex', gap: '0.5rem'}}>
+                <input type="text" id="newEmoji" placeholder="Emoji (e.g. 🦊)" style={{width: '80px', padding: '0.5rem', background: 'var(--bg-dark)', color: 'white', border: '1px solid var(--border)', borderRadius: '4px'}} />
+                <input type="text" id="newDesc" placeholder="Description (e.g. Tricky)" style={{flex: 1, padding: '0.5rem', background: 'var(--bg-dark)', color: 'white', border: '1px solid var(--border)', borderRadius: '4px'}} />
+                <button className="btn primary" onClick={() => {
+                  const emoji = document.getElementById('newEmoji').value;
+                  const desc = document.getElementById('newDesc').value;
+                  if (emoji && desc) {
+                    const newTags = [...customTags, { emoji, desc }];
+                    setDoc(doc(db, 'userSettings', currentUser.uid), { tags: newTags }, { merge: true });
+                    document.getElementById('newEmoji').value = '';
+                    document.getElementById('newDesc').value = '';
+                  }
+                }}>Add</button>
+              </div>
+            </div>
+
             <div className="input-label">Notes & Reads</div>
             <textarea 
               value={u.notes || ''} 
