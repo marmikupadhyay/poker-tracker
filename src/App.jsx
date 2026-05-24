@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
-import { db } from './firebase';
+import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, signOut } from "firebase/auth";
+import { db, auth } from './firebase';
 import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -31,6 +32,15 @@ export default function App() {
   const [users, setUsers] = useState([]); 
   const [currentSessionId, setCurrentSessionId] = useState(null);
   
+  // Auth state
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authMode, setAuthMode] = useState('login');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authName, setAuthName] = useState('');
+  const [authError, setAuthError] = useState('');
+  
   // 'session', 'history', 'users'
   const [viewMode, setViewMode] = useState('session');
   
@@ -56,6 +66,11 @@ export default function App() {
   const currentSession = useMemo(() => sessions.find(s => s.id === currentSessionId), [sessions, currentSessionId]);
 
   useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+      setAuthLoading(false);
+    });
+
     const unsubSessions = onSnapshot(collection(db, 'sessions'), (snapshot) => {
       const fetched = snapshot.docs.map(d => d.data());
       setSessions(fetched);
@@ -64,7 +79,7 @@ export default function App() {
       const fetched = snapshot.docs.map(d => d.data());
       setUsers(fetched);
     });
-    return () => { unsubSessions(); unsubUsers(); };
+    return () => { unsubAuth(); unsubSessions(); unsubUsers(); };
   }, []);
 
   const updateSession = (updater) => {
@@ -76,6 +91,36 @@ export default function App() {
       }
       return s;
     }));
+  };
+
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    try {
+      if (authMode === 'register') {
+        const cred = await createUserWithEmailAndPassword(auth, authEmail, authPassword);
+        const newUser = { id: cred.user.uid, name: authName || authEmail.split('@')[0], tags: [], notes: '' };
+        await setDoc(doc(db, 'users', cred.user.uid), newUser);
+      } else {
+        await signInWithEmailAndPassword(auth, authEmail, authPassword);
+      }
+    } catch (err) {
+      setAuthError(err.message);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    setAuthError('');
+    try {
+      const provider = new GoogleAuthProvider();
+      const cred = await signInWithPopup(auth, provider);
+      await setDoc(doc(db, 'users', cred.user.uid), { 
+        id: cred.user.uid, 
+        name: cred.user.displayName || cred.user.email.split('@')[0]
+      }, { merge: true });
+    } catch (err) {
+      setAuthError(err.message);
+    }
   };
 
   const createAnonymousPlayer = (idx) => ({
@@ -834,12 +879,63 @@ export default function App() {
   };
 
   // -- Main Render --
+
+  if (authLoading) return <div className="app-container"><p style={{textAlign: 'center', marginTop: '2rem'}}>Loading Tracker...</p></div>;
+
+  if (!currentUser) {
+    return (
+      <div className="app-container" style={{display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '80vh'}}>
+        <h1 style={{fontSize: '2.5rem', marginBottom: '2rem'}}>♠️ Poker Tracker</h1>
+        
+        <form onSubmit={handleAuthSubmit} className="panel" style={{width: '100%', maxWidth: '400px'}}>
+          <h2 style={{marginBottom: '1rem', textAlign: 'center'}}>{authMode === 'login' ? 'Login' : 'Register'}</h2>
+          
+          {authError && <div style={{color: 'var(--danger)', marginBottom: '1rem', textAlign: 'center'}}>{authError}</div>}
+          
+          {authMode === 'register' && (
+            <div className="input-group mb-1">
+              <label className="input-label">Display Name</label>
+              <input type="text" value={authName} onChange={e => setAuthName(e.target.value)} required />
+            </div>
+          )}
+          
+          <div className="input-group mb-1">
+            <label className="input-label">Email</label>
+            <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} required style={{width: '100%', padding: '0.8rem 1rem', background: 'var(--bg-dark)', color: 'white', border: '1px solid var(--border)', borderRadius: '8px'}} />
+          </div>
+          
+          <div className="input-group mb-2">
+            <label className="input-label">Password</label>
+            <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} required style={{width: '100%', padding: '0.8rem 1rem', background: 'var(--bg-dark)', color: 'white', border: '1px solid var(--border)', borderRadius: '8px'}} />
+          </div>
+          
+          <button type="submit" className="btn primary full-width mb-1">{authMode === 'login' ? 'Sign In' : 'Create Account'}</button>
+          
+          <div style={{textAlign: 'center', margin: '1rem 0', color: 'var(--text-muted)'}}>OR</div>
+          
+          <button type="button" onClick={handleGoogleLogin} className="btn secondary full-width mb-2" style={{display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem'}}>
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#fff" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#fff" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#fff" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#fff" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+            Sign in with Google
+          </button>
+          
+          <div style={{textAlign: 'center', fontSize: '0.9rem'}}>
+            {authMode === 'login' ? "Don't have an account? " : "Already have an account? "}
+            <span style={{color: 'var(--accent)', cursor: 'pointer', fontWeight: 'bold'}} onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>
+              {authMode === 'login' ? 'Register' : 'Login'}
+            </span>
+          </div>
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
       <header>
-        <h1>Poker Tracker (Cloud Sync Live)</h1>
-        <div className="header-actions">
-          <span style={{color: 'var(--success)', fontWeight: 'bold'}}>● Synced to Firebase</span>
+        <h1>Poker Tracker</h1>
+        <div className="header-actions" style={{display: 'flex', alignItems: 'center', gap: '1rem'}}>
+          <span style={{color: 'var(--success)', fontWeight: 'bold'}}>● Synced</span>
+          <button onClick={() => signOut(auth)} className="btn secondary" style={{padding: '0.4rem 0.8rem'}}>Logout</button>
         </div>
       </header>
 
