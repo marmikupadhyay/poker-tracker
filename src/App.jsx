@@ -1049,9 +1049,17 @@ export default function App() {
             <h3>🦸‍♂️ Hero Setup</h3>
             <div className="input-group mb-1">
               <label className="input-label">Your Global Profile</label>
-              <select value={heroUserId} onChange={e => setHeroUserId(e.target.value)}>
+              <select value={heroUserId} onChange={e => {
+                if (e.target.value === 'NEW') {
+                  const newUser = handleCreateUser();
+                  if (newUser) setHeroUserId(newUser.id);
+                } else {
+                  setHeroUserId(e.target.value);
+                }
+              }}>
                 <option value="none">-- Anonymous / Don't Seat Me --</option>
                 {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                <option value="NEW" style={{ color: 'var(--accent)' }}>+ Add New User</option>
               </select>
             </div>
             <div style={{display: 'flex', gap: '1rem'}}>
@@ -1170,16 +1178,20 @@ export default function App() {
         <div className="modal">
           <div className="modal-content panel">
             <div className="modal-header">
-              <select 
-                className="player-name-input" 
-                style={{ appearance: 'none', background: 'var(--bg-dark)' }}
-                value={currentSession.players[modalSeatIdx].userId}
-                onChange={(e) => assignUserToSeat(modalSeatIdx, e.target.value)}
-              >
-                <option disabled value={currentSession.players[modalSeatIdx].userId}>{currentSession.players[modalSeatIdx].name}</option>
-                {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                <option value="NEW" style={{ color: 'var(--accent)' }}>+ Add New User</option>
-              </select>
+              {currentSession.players[modalSeatIdx].userId === currentUser.uid ? (
+                <div style={{fontWeight: 'bold', color: 'var(--accent)', padding: '0.5rem', flex: 1}}>🦸‍♂️ {currentSession.players[modalSeatIdx].name} (Hero)</div>
+              ) : (
+                <select 
+                  className="player-name-input" 
+                  style={{ appearance: 'none', background: 'var(--bg-dark)' }}
+                  value={currentSession.players[modalSeatIdx].userId}
+                  onChange={(e) => assignUserToSeat(modalSeatIdx, e.target.value)}
+                >
+                  <option disabled value={currentSession.players[modalSeatIdx].userId}>{currentSession.players[modalSeatIdx].name}</option>
+                  {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  <option value="NEW" style={{ color: 'var(--accent)' }}>+ Add New User</option>
+                </select>
+              )}
               <button onClick={() => setModalSeatIdx(null)} className="btn secondary">X</button>
             </div>
             
